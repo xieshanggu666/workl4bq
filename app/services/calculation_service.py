@@ -62,12 +62,11 @@ def count_unverified_activities(db: Session, company_id: int, year: int) -> int:
     )
 
 
-def recalc_company_year(db: Session, company_id: int, year: int) -> int:
-    """重算某企业某年度全部**已核验**活动数据的排放量（先清除旧结果保证幂等）。
+def recalc_company_year_tx(db: Session, company_id: int, year: int) -> int:
+    """重算内核：在调用方事务内执行（不自行提交/回滚）。
 
-    数据状态约束：仅核查员核验通过（verified=1）的活动数据才允许进入核算，
-    未核验数据在源头被排除，避免污染核算结果及其后的年度报告、配额冻结和履约闭环。
-    活动数据完成核验后需重新触发核算方可计入结果。
+    供批量核验等组合操作复用：核验标记、核算结果与报告快照可在同一事务
+    提交，任一步失败整体回滚，绝不出现"已核验但未重算"的半成品状态。
     """
     db.query(EmissionResult).filter(
         EmissionResult.company_id == company_id, EmissionResult.year == year
@@ -108,6 +107,18 @@ def recalc_company_year(db: Session, company_id: int, year: int) -> int:
                 )
             )
             count += 1
+    db.flush()
+    return count
+
+
+def recalc_company_year(db: Session, company_id: int, year: int) -> int:
+    """重算某企业某年度全部**已核验**活动数据的排放量（先清除旧结果保证幂等）。
+
+    数据状态约束：仅核查员核验通过（verified=1）的活动数据才允许进入核算，
+    未核验数据在源头被排除，避免污染核算结果及其后的年度报告、配额冻结和履约闭环。
+    活动数据完成核验后需重新触发核算方可计入结果。
+    """
+    count = recalc_company_year_tx(db, company_id, year)
     db.commit()
     return count
 

@@ -33,6 +33,17 @@ class ActivityIn(BaseModel):
     data_source: str = ""
 
 
+class ActivityBatchVerifyIn(BaseModel):
+    """年度活动数据批量核验：按 ID 列表或按企业+年度核验全部待核验记录。"""
+
+    # 直接指定记录（同批必须属于同一企业同一年度）；缺省按 company_id + year 过滤
+    ids: list[int] | None = Field(default=None, max_length=500)
+    company_id: int | None = None
+    year: int | None = None
+    # 核验后同事务重算并联动刷新 MRV 报告草稿（默认开启；失败整体回滚）
+    recalculate: bool = True
+
+
 class FactorIn(BaseModel):
     factor_code: str
     name: str

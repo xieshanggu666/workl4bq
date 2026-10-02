@@ -6,6 +6,7 @@ views.ActivityView = () => {
   const [form, setForm] = React.useState({ scope_id: "", year: 2025, period: "monthly", activity_type: "", unit: "", quantity: "", data_source: "" });
   const [scopes, setScopes] = React.useState([]);
   const [msg, setMsg] = React.useState({ type: "", text: "" });
+  const [batchMsg, setBatchMsg] = React.useState({ type: "", text: "" });
 
   const load = () => {
     const params = new URLSearchParams();
@@ -44,6 +45,28 @@ views.ActivityView = () => {
   const verify = async (id) => {
     try { await api.post(`/api/activity/${id}/verify`); load(); }
     catch (err) { setMsg({ type: "err", text: err.message }); }
+  };
+
+  const batchVerify = async () => {
+    if (!filterCompany || !filterYear) {
+      setBatchMsg({ type: "err", text: "请先按企业与年度筛选，再执行年度批量核验" });
+      return;
+    }
+    const cname = companies.find((c) => String(c.id) === String(filterCompany))?.name || `企业${filterCompany}`;
+    if (!confirm(`将对 ${cname} ${filterYear} 年度全部待核验数据执行批量核验并重新核算（联动刷新报告草稿），确认继续？`)) return;
+    setBatchMsg({ type: "", text: "" });
+    try {
+      const r = await api.post("/api/activity/verify-batch", { company_id: Number(filterCompany), year: Number(filterYear) });
+      const parts = [`批量核验完成：新核验 ${r.verified_count} 条`];
+      if (r.already_verified) parts.push(`此前已核验 ${r.already_verified} 条`);
+      if (r.recalculated) parts.push(`重算结果 ${r.result_count} 条`);
+      parts.push(`剩余未核验 ${r.unverified_remaining} 条`);
+      if (r.report) parts.push(`报告状态 ${r.report.status}（排放 ${fmtNum(r.report.total_emission)} tCO2e）`);
+      setBatchMsg({ type: "ok", text: parts.join("，") + (r.warning ? `。${r.warning}` : "") });
+      load();
+    } catch (err) {
+      setBatchMsg({ type: "err", text: err.message });
+    }
   };
 
   const isVerifier = window.__user.role === "verifier" || window.__user.role === "admin";
@@ -106,7 +129,9 @@ views.ActivityView = () => {
             ${[2023, 2024, 2025, 2026].map((y) => html`<option value=${y}>${y}</option>`)}
           </select>
         </div>
+        ${isVerifier && html`<button class="btn" onClick=${batchVerify} title="按当前企业+年度筛选核验全部待核验数据，并同事务重算、刷新报告草稿">批量核验并重算</button>`}
       </div>
+      ${batchMsg.text && html`<div class="msg ${batchMsg.type}">${batchMsg.text}</div>`}
       <table>
         <thead><tr><th>ID</th><th>企业</th><th>边界</th><th>年度</th><th>类型</th><th>活动量</th><th>单位</th><th>核验</th><th></th></tr></thead>
         <tbody>

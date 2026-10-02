@@ -4,7 +4,8 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.deps import ensure_company_access, get_current_user, require_roles
 from app.models import ActivityData, EmissionScope, User
-from app.schemas import ActivityIn
+from app.schemas import ActivityBatchVerifyIn, ActivityIn
+from app.services.verification_service import batch_verify_activities
 
 router = APIRouter(prefix="/api", tags=["activity"])
 
@@ -79,3 +80,22 @@ def verify_activity(activity_id: int, db: Session = Depends(get_db), user: User 
     activity.verified = 1
     db.commit()
     return {"id": activity.id, "verified": activity.verified}
+
+
+@router.post("/activity/verify-batch")
+def verify_activity_batch(
+    data: ActivityBatchVerifyIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles("verifier", "admin")),
+):
+    """年度批量核验：核验 + 重算 + 报告草稿联动单事务完成，失败整体回滚。"""
+    try:
+        return batch_verify_activities(
+            db,
+            activity_ids=data.ids,
+            company_id=data.company_id,
+            year=data.year,
+            recalculate=data.recalculate,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

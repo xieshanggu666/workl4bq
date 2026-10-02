@@ -26,6 +26,10 @@ def dashboard_stats(db: Session, year: int | None = None, user: User | None = No
         company_query = company_query.filter(Company.id.in_(company_ids))
     total_companies = company_query.count()
     total_activity = company_filtered(db.query(ActivityData), ActivityData).count()
+    # 待核验活动数据：未核验记录不进入核算，是批准前拦截与批量核验的直接对象
+    unverified_activity = company_filtered(db.query(ActivityData), ActivityData).filter(
+        ActivityData.verified == 0
+    ).count()
     total_results = company_filtered(db.query(EmissionResult), EmissionResult).count()
 
     def sum_column(model, column):
@@ -69,6 +73,7 @@ def dashboard_stats(db: Session, year: int | None = None, user: User | None = No
     return {
         "total_companies": total_companies,
         "total_activity": total_activity,
+        "unverified_activity": unverified_activity,
         "total_results": total_results,
         "emission_total": round(float(emission_total), 4),
         "quota_total": round(float(quota_total), 4),
