@@ -33,6 +33,20 @@ class ActivityIn(BaseModel):
     data_source: str = ""
 
 
+class ActivityBatchVerifyIn(BaseModel):
+    """批量核验活动数据：按 id 列表或 企业+年度 圈定（id 优先）。
+
+    - ``recalculate``：核验后在同一事务内对受影响的企业年度重算排放量并联动草稿报告；
+    - ``idempotency_key``：可选幂等键（核验本身为状态收敛操作，重发结果一致）。
+    """
+
+    activity_ids: list[int] | None = None
+    company_id: int | None = None
+    year: int | None = None
+    recalculate: bool = True
+    idempotency_key: str | None = None
+
+
 class FactorIn(BaseModel):
     factor_code: str
     name: str

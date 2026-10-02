@@ -39,7 +39,6 @@ from app.models.company import Company
 from app.models.report import MrvReport
 from app.services.calculation_service import annual_total, count_unverified_activities
 
-
 def _today() -> str:
     return datetime.utcnow().strftime("%Y-%m-%d")
 
@@ -226,6 +225,16 @@ def freeze_allowance_for_report(
         raise ValueError(
             f"该企业{year}年度仍有 {pending} 条活动数据未核验，不能批准报告；"
             "请先完成核验、重新核算并重新生成报告"
+        )
+
+    # 快照一致性拦截：批量核验/重算可能已使核算结果领先于报告快照。
+    # 若报告排放快照与最新核算合计不一致，说明报告过期，必须重新生成后再提交批准，
+    # 防止用旧快照冻结配额、形成错误的履约义务。
+    latest_total = annual_total(db, company_id, year)
+    if abs(latest_total - round(float(report.total_emission), 4)) > 0.01:
+        raise ValueError(
+            f"报告排放快照（{float(report.total_emission):.4f}）与最新核算结果"
+            f"（{latest_total:.4f}）不一致，数据核验后已重算；请重新生成并提交报告后再批准"
         )
 
     emission = round(float(report.total_emission), 4)

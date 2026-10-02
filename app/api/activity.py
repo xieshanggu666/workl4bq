@@ -4,7 +4,8 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.deps import ensure_company_access, get_current_user, require_roles
 from app.models import ActivityData, EmissionScope, User
-from app.schemas import ActivityIn
+from app.schemas import ActivityBatchVerifyIn, ActivityIn
+from app.services.verification_service import BatchVerifyError, batch_verify_activities
 
 router = APIRouter(prefix="/api", tags=["activity"])
 
@@ -71,11 +72,50 @@ def create_activity(data: ActivityIn, db: Session = Depends(get_db), user: User 
     return {"id": activity.id, "quantity": float(activity.quantity)}
 
 
+@router.post("/activity/batch-verify")
+def batch_verify(
+    data: ActivityBatchVerifyIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles("verifier", "admin")),
+):
+    """批量核验活动数据：按 id 列表或 企业+年度 圈定，核验→重算→草稿联动单事务完成。
+
+    - 已批准年度（配额已冻结）拒绝核验，须先冲正报告；
+    - 已提交报告快照随核验重算刷新并退回草稿，避免过期快照被批准；
+    - 任何一步失败整批回滚，不会出现部分核验成功。
+    """
+    ids = data.activity_ids or None
+    try:
+        result = batch_verify_activities(
+            db,
+            activity_ids=ids,
+            company_id=data.company_id,
+            year=data.year,
+            recalculate=data.recalculate,
+        )
+    except BatchVerifyError as e:
+        raise HTTPException(status_code=e.http_status, detail=str(e))
+    return result
+
+
 @router.post("/activity/{activity_id}/verify")
 def verify_activity(activity_id: int, db: Session = Depends(get_db), user: User = Depends(require_roles("verifier", "admin"))):
+    """单条核验：走批量核验内核，同样联动重算与 MRV 草稿（单事务可回滚）。"""
     activity = db.get(ActivityData, activity_id)
     if not activity:
         raise HTTPException(status_code=404, detail="活动数据不存在")
-    activity.verified = 1
-    db.commit()
-    return {"id": activity.id, "verified": activity.verified}
+    try:
+        result = batch_verify_activities(db, activity_ids=[activity_id], recalculate=True)
+    except BatchVerifyError as e:
+        raise HTTPException(status_code=e.http_status, detail=str(e))
+    affected = result["affected"][0] if result["affected"] else {}
+    return {
+        "id": activity_id,
+        "verified": 1,
+        "verified_count": result["verified_count"],
+        "recalculated": result["recalculated"],
+        "reports": result["reports"],
+        "warnings": result["warnings"],
+        "company_id": affected.get("company_id"),
+        "year": affected.get("year"),
+    }

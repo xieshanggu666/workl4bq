@@ -18,7 +18,7 @@ views.DashboardView = () => {
   return html`
     <div class="cards">
       <div class="card"><div class="label">控排企业</div><div class="value">${stats.total_companies}</div><div class="sub">平台注册企业</div></div>
-      <div class="card"><div class="label">活动数据</div><div class="value">${stats.total_activity}</div><div class="sub">台账记录总数</div></div>
+      <div class="card"><div class="label">活动数据</div><div class="value">${stats.total_activity}</div><div class="sub">已核验 ${stats.verified_activity ?? 0} · 待核验 ${stats.pending_activity ?? 0}</div></div>
       <div class="card"><div class="label">核算结果</div><div class="value">${stats.total_results}</div><div class="sub">排放量明细条数</div></div>
       <div class="card"><div class="label">累计排放量</div><div class="value">${fmtNum(stats.emission_total)} tCO2e</div><div class="sub">核算结果汇总</div></div>
       <div class="card"><div class="label">配额总量</div><div class="value">${fmtNum(stats.quota_total)} t</div><div class="sub">年度免费配额</div></div>

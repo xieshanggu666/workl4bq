@@ -6,13 +6,18 @@ views.ActivityView = () => {
   const [form, setForm] = React.useState({ scope_id: "", year: 2025, period: "monthly", activity_type: "", unit: "", quantity: "", data_source: "" });
   const [scopes, setScopes] = React.useState([]);
   const [msg, setMsg] = React.useState({ type: "", text: "" });
+  const [selected, setSelected] = React.useState(new Set());
+  const [busy, setBusy] = React.useState(false);
 
   const load = () => {
     const params = new URLSearchParams();
     if (filterCompany) params.set("company_id", filterCompany);
     if (filterYear) params.set("year", filterYear);
     const qs = params.toString();
-    api.get(`/api/activity${qs ? "?" + qs : ""}`).then(setList).catch((e) => setMsg({ type: "err", text: e.message }));
+    api.get(`/api/activity${qs ? "?" + qs : ""}`).then((rows) => {
+      setList(rows);
+      setSelected(new Set());
+    }).catch((e) => setMsg({ type: "err", text: e.message }));
   };
   React.useEffect(() => { load(); }, [filterCompany, filterYear]);
 
@@ -41,12 +46,70 @@ views.ActivityView = () => {
     }
   };
 
-  const verify = async (id) => {
-    try { await api.post(`/api/activity/${id}/verify`); load(); }
-    catch (err) { setMsg({ type: "err", text: err.message }); }
+  const isVerifier = window.__user.role === "verifier" || window.__user.role === "admin";
+
+  const pendingRows = list.filter((a) => !a.verified);
+  const pendingIds = pendingRows.map((a) => a.id);
+
+  const toggle = (id) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
   };
 
-  const isVerifier = window.__user.role === "verifier" || window.__user.role === "admin";
+  const toggleAll = () => {
+    setSelected((prev) => (prev.size === pendingIds.length ? new Set() : new Set(pendingIds)));
+  };
+
+  const summarize = (res) => {
+    const lines = [];
+    if (res.verified_count) {
+      const years = (res.affected || []).map((a) => `${a.company_name}${a.year}年`).join("、");
+      lines.push(`已批量核验 ${res.verified_count} 条（${years}）`);
+    }
+    (res.recalculated || []).forEach((r) => lines.push(`${r.year}年重算 ${r.result_count} 条排放结果`));
+    const reportLines = (res.reports || [])
+      .filter((r) => r.action === "updated" || r.action === "reset_submitted" || r.action === "created")
+      .map((r) => (r.action === "reset_submitted"
+        ? `${r.year}年已提交报告快照过期，已退回草稿`
+        : `${r.year}年 MRV 草稿已联动刷新`));
+    lines.push(...new Set(reportLines));
+    (res.warnings || []).forEach((w) => lines.push(`⚠ ${w}`));
+    return lines.length ? lines.join("；") : "没有符合条件的待核验数据";
+  };
+
+  const runBatch = async (payload) => {
+    setBusy(true);
+    setMsg({ type: "", text: "" });
+    try {
+      const res = await api.post("/api/activity/batch-verify", payload, api.idemKey());
+      setMsg({ type: res.warnings && res.warnings.length ? "warn" : "ok", text: summarize(res) });
+      load();
+    } catch (err) {
+      setMsg({ type: "err", text: err.message });
+      setBusy(false);
+      return;
+    }
+    setBusy(false);
+  };
+
+  const verifySelected = () => {
+    if (!selected.size) return;
+    runBatch({ activity_ids: Array.from(selected), recalculate: true });
+  };
+
+  const verifyAllFiltered = () => {
+    if (!pendingIds.length) return;
+    if (!filterYear) {
+      setMsg({ type: "warn", text: "一键核验全部前请先按年度筛选，避免跨年度混批" });
+      return;
+    }
+    const payload = { year: Number(filterYear), recalculate: true };
+    if (filterCompany) payload.company_id = Number(filterCompany);
+    runBatch(payload);
+  };
 
   return html`
     <div class="panel">
@@ -106,12 +169,29 @@ views.ActivityView = () => {
             ${[2023, 2024, 2025, 2026].map((y) => html`<option value=${y}>${y}</option>`)}
           </select>
         </div>
+        ${isVerifier && html`
+          <div class="actions" style=${{marginLeft: "auto"}}>
+            <button class="btn" onClick=${verifySelected} disabled=${busy || !selected.size}>
+              批量核验选中${selected.size ? `（${selected.size}）` : ""}
+            </button>
+            <button class="btn" onClick=${verifyAllFiltered} disabled=${busy || !pendingIds.length}>
+              一键核验本页待核验${pendingIds.length ? `（${pendingIds.length}）` : ""}
+            </button>
+          </div>`}
       </div>
       <table>
-        <thead><tr><th>ID</th><th>企业</th><th>边界</th><th>年度</th><th>类型</th><th>活动量</th><th>单位</th><th>核验</th><th></th></tr></thead>
+        <thead><tr>
+          ${isVerifier && html`<th style=${{width: 36}}>
+            <input type="checkbox" checked=${pendingIds.length > 0 && selected.size === pendingIds.length}
+              onChange=${toggleAll} disabled=${!pendingIds.length} title="全选待核验" />
+          </th>`}
+          <th>ID</th><th>企业</th><th>边界</th><th>年度</th><th>类型</th><th>活动量</th><th>单位</th><th>核验</th>
+        </tr></thead>
         <tbody>
           ${list.map((a) => html`
             <tr key=${a.id}>
+              ${isVerifier && html`<td>${!a.verified && html`
+                <input type="checkbox" checked=${selected.has(a.id)} onChange=${() => toggle(a.id)} />`}</td>`}
               <td class="mono">#${a.id}</td>
               <td>${companies.find((c) => c.id === a.company_id)?.name || a.company_id}</td>
               <td>${a.scope_no ? scopeLabel(a.scope_no) : "-"}</td>
@@ -120,11 +200,14 @@ views.ActivityView = () => {
               <td>${fmtNum(a.quantity)}</td>
               <td>${a.unit}</td>
               <td>${a.verified ? html`<span class="badge ok">已核验</span>` : html`<span class="badge warn">待核验</span>`}</td>
-              <td>${!a.verified && isVerifier && html`<button class="btn sm" onClick=${() => verify(a.id)}>核验</button>`}</td>
             </tr>`)}
-          ${list.length === 0 && html`<tr><td colspan="9" class="empty">暂无活动数据</td></tr>`}
+          ${list.length === 0 && html`<tr><td colspan="${isVerifier ? 9 : 8}" class="empty">暂无活动数据</td></tr>`}
         </tbody>
       </table>
+      <p class="sub" style=${{color: "var(--text-dim)"}}>
+        批量核验在同一事务内完成“核验 → 年度重算 → MRV 草稿刷新”，任一失败整批回滚；
+        已批准年度需先冲正报告，已提交报告快照过期会自动退回草稿。
+      </p>
     </div>
   `;
 };
